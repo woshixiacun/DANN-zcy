@@ -43,7 +43,7 @@ img_transform_target = transforms.Compose([
 
 dataset_source = datasets.MNIST(
     # root='../dataset',
-    root='/mnt/d/Study_File/codezcy/DANN/dataset',
+    root='/mnt/d/Study_File/codezcy/DANN-zcy/dataset',
     train=True,
     transform=img_transform_source,
     # download=True

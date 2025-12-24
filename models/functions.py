@@ -2,17 +2,27 @@ from torch.autograd import Function
 
 
 class ReverseLayerF(Function):
+    # 这段代码通过继承 torch.autograd.Function 自定义了一个自动求导函数。
 
+    # 正向传播
     @staticmethod
     def forward(ctx, x, alpha):
+        # 操作：它不对输入 x 做任何实质性修改，只是通过 x.view_as(x) 返回了与 x 相同的张量。
+        
+        # 参数：alpha 是一个超参数，用于控制梯度反转的强度。
+        # 存储：ctx.alpha = alpha 将该参数保存在上下文中，供反向传播时使用。
         ctx.alpha = alpha
 
         return x.view_as(x)
 
+    # 反向传播（核心所在）
     @staticmethod
     def backward(ctx, grad_output):
-        output = grad_output.neg() * ctx.alpha
-
+        # neg()：将梯度取反（乘以 -1）。
+        # * ctx.alpha：对梯度进行缩放。
+        output = grad_output.neg() * ctx.alpha  
+        # 返回值：返回 output, None。因为 forward 有两个输入（x 和 alpha），所以反向传播也要返回两个梯度。
+        # alpha 是超参数不需要梯度，所以返回 None。
         return output, None
 
 
