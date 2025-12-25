@@ -8,6 +8,8 @@ __pycache__/
 *.pth
 data/
 *.png
+*.zip
+
 # dataset/
 dataset/MNIST/
 dataset/mnist_m/

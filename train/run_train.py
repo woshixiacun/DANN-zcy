@@ -1,8 +1,8 @@
 import sys
 from pathlib import Path
 from typing import Tuple
-
-sys.path.append(r"C:\Users\Clavi\Desktop\coding\DANN-zcy")
+ROOT = Path(__file__).resolve().parent.parent  # 项目根目录
+sys.path.append(str(ROOT))
 
 import random
 import torch.backends.cudnn as cudnn

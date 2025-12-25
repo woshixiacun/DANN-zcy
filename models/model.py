@@ -17,7 +17,10 @@ class CNNModel(nn.Module):
         self.feature.add_module('f_pool1', nn.MaxPool2d(2))
         # ReLU 激活，inplace=True 省显存
         self.feature.add_module('f_relu1', nn.ReLU(True))
-        
+        # 还可以用其他激活函数
+            # ReLU：简单粗暴、速度快、负半轴“死亡”风险；
+            # SiLU：平滑门控、梯度更友好、精度略高，但多一次 sigmoid 计算。
+            # 大模型/追求 SOTA → 无脑 SiLU；资源卡得很死的小终端 → ReLU 依旧真香。
         
         # 第 2 组卷积：64→50 通道，核 5×5 → 8×8
         self.feature.add_module('f_conv2', nn.Conv2d(64, 50, kernel_size=5))
@@ -28,18 +31,6 @@ class CNNModel(nn.Module):
         self.feature.add_module('f_relu2', nn.ReLU(True))
         # TODO 1:  在这里增加Transformer layer，注意，层的输入和输出的维度
         # TODO 2:  提取完【特征】后，用【特征】计算流形
-        
-        # # ===== 2. 一层 Transformer =====
-        # d_model = 50                 # 与 CNN 输出通道一致
-        # self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))  # 1×1×50
-        # encoder_layer = TransformerEncoderLayer(
-        #     d_model=d_model,
-        #     nhead=trans_heads,
-        #     dim_feedforward=d_model*2,
-        #     dropout=trans_drop,
-        #     batch_first=True          # 输入形状 (B, L, d_model)
-        # )
-        # self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=1)
 
 
         # ===== 标签分类器（数字 0-9） =====
