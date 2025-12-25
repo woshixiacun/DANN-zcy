@@ -135,7 +135,7 @@ def train():
 
             s_img, s_label = data_source
 
-            # 清空梯度33
+            # 清空梯度
             my_net.zero_grad()
             batch_size = len(s_label)
 
@@ -207,6 +207,9 @@ def train():
     print( 'done')
 
 
+def test_zcy():
+
+    pass
 
 if __name__ == '__main__':
 
