@@ -16,6 +16,7 @@ from train.test import test
 
 
 def train() -> None:
+    # ===================参数/路径/随机种子初始化===================
     source_name = "MNIST"
     target_name = "mnist_m"
 
@@ -42,7 +43,7 @@ def train() -> None:
     random.seed(manual_seed)
     torch.manual_seed(manual_seed)
     
-    # ===================加载数据===================
+    # ===================构造 MNIST与 MNIST-M的DataLoader===================
     # 数据增强
     img_tf_source = transforms.Compose(
         [
@@ -93,7 +94,7 @@ def train() -> None:
         num_workers=8
     )
 
-    # ===================实例化模型、优化器、loss===================
+    # ===================实例化CNN模型、优化器===================
     # load model
     # 实例化网络，里面包含：特征提取器 + 分类器 + 域判别器（含 GRL）
     net = CNNModel()
@@ -102,6 +103,7 @@ def train() -> None:
     # 优化器： Adam 统一更新所有参数
     opt = optim.Adam(net.parameters(), lr=lr)
 
+    # ===================损失函数:NLLLOSS==================
     # 故障分类器的损失、域分类器的损失都是负对数似然（网络最后会 log_softmax）
     loss_cls = torch.nn.NLLLoss()
     loss_dom = torch.nn.NLLLoss()
@@ -126,7 +128,7 @@ def train() -> None:
         for i in range(n_iter):
             # 每个 iter 各拿一批源域和目标域
 
-            # **梯度反转系数 α（GRL 核心）-----------------------------------------------
+            # **梯度反转系数 α（GRL 核心）
             # 控制 梯度反转层（GRL）的权重 α 随训练进度平滑地从 0 增长到 1。
             # 平滑 S 型，论文公式，反向传播时 乘在域判别器梯度上，实现“梯度反转”
             p = float(i + epoch * n_iter) / n_epoch / n_iter
