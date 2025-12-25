@@ -5,7 +5,7 @@ class ReverseLayerF(Function):
     # 这段代码通过继承 torch.autograd.Function 自定义了一个自动求导函数。
 
     # 正向传播
-    @staticmethod
+    @staticmethod  # 是 Python 的装饰器，用来声明一个静态方法（static method）。
     def forward(ctx, x, alpha):
         # 操作：它不对输入 x 做任何实质性修改，只是通过 x.view_as(x) 返回了与 x 相同的张量。
         

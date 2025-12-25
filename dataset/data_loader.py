@@ -23,7 +23,8 @@ class GetLoader(data.Dataset):
 
     def __getitem__(self, item): # (读取单条数据)
         # 这是 DataLoader 在训练过程中不断调用的核心方法：
-
+        
+        # TODO：【要读信号，修改这部分】
         # 索引定位：根据传入的 item（索引）找到对应的图片路径和标签。
         img_paths, labels = self.img_paths[item], self.img_labels[item]  # 根据传入的 item（索引）找到对应的图片路径和标签。
         # 加载图片：使用 PIL.Image.open 打开图片，并强制转换为 RGB 模式（防止灰度图或带透明通道的图导致维度不匹配）。
