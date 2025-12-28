@@ -71,4 +71,4 @@ class CNNModel(nn.Module):
         # 域分类结果
         domain_output = self.domain_classifier(reverse_feature)
 
-        return class_output, domain_output
+        return class_output, domain_output, feature

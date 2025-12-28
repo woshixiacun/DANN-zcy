@@ -161,11 +161,16 @@ def train() -> None:
             cls_label.copy_(s_label)
             
             # **输入模型
-            out_cls, out_dom = net(input_img, alpha=alpha)
+            out_cls, out_dom, out_feature = net(input_img, alpha=alpha)
+            # TODO：让net返回feature extracter的最后一层特征
+            # 利用特征算流形
+            # 增加一个流形 loss_manifold
             
             # 网络返回：分类 logits，域判别 logits
             err_s_cls = loss_cls(out_cls, cls_label)
             err_s_dom = loss_dom(out_dom, domain_label)
+
+
 
             # ---- target ----
             # 目标域前向 + 误差【目标域不训练故障分类器，只要域判别输出】
