@@ -1,5 +1,8 @@
 from torch.autograd import Function
+import torch
+import torch.nn as nn
 
+from MKGLMFA.manifoldfeature import manifea_troch
 
 class ReverseLayerF(Function):
     # 这段代码通过继承 torch.autograd.Function 自定义了一个自动求导函数。
@@ -26,3 +29,43 @@ class ReverseLayerF(Function):
         return output, None
 
 
+class ManifoldLayer_BatchLevel(nn.Module):
+    """
+    batch level
+    Non-parametric manifold projection layer (MKGLMFA).
+    This layer is intentionally NON-differentiable.
+    """
+
+    def __init__(self, options):
+        super().__init__()
+        self.options = options
+
+    def forward(self, feature, labels):
+        """
+        feature: Tensor [B, D], requires_grad=True
+        labels : Tensor [B]
+        return : Tensor [B, d]
+        """
+
+        device = feature.device
+
+        # ---------- 强制不进计算图 ----------
+        with torch.no_grad():
+            feature_np = feature.detach().cpu()
+            labels_np = labels.detach().cpu()
+
+            Z = manifea_troch(feature_np, labels_np, self.options)
+
+            if not torch.is_tensor(Z):
+                Z = torch.from_numpy(Z)
+
+            Z = Z.to(device)
+
+        return Z
+    
+def manifold_reg_loss(feature, L):
+    """
+    feature: [B, d], requires_grad=True
+    L: [B, B] Laplacian (no grad)
+    """
+    return torch.trace(feature.T @ L @ feature)

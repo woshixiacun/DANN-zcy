@@ -1,6 +1,9 @@
 import torch.nn as nn
 from .functions import ReverseLayerF
+from .functions import ManifoldLayer_BatchLevel
+
 from torch.nn import TransformerEncoderLayer
+
 
 class CNNModel(nn.Module):
 
@@ -36,7 +39,8 @@ class CNNModel(nn.Module):
         # ===== 标签分类器（数字 0-9） =====
         self.class_classifier = nn.Sequential()
         # 把 50×4×4=800 维拉平后接全连接
-        self.class_classifier.add_module('c_fc1', nn.Linear(50 * 4 * 4, 100))
+        # self.class_classifier.add_module('c_fc1', nn.Linear(50 * 4 * 4, 100))
+        self.class_classifier.add_module('c_fc1', nn.Linear(10, 100))
         self.class_classifier.add_module('c_bn1', nn.BatchNorm1d(100))
         self.class_classifier.add_module('c_relu1', nn.ReLU(True))
         self.class_classifier.add_module('c_drop1', nn.Dropout2d())
@@ -48,13 +52,29 @@ class CNNModel(nn.Module):
 
         # ===== 域分类器（source vs target） =====
         self.domain_classifier = nn.Sequential()
-        self.domain_classifier.add_module('d_fc1', nn.Linear(50 * 4 * 4, 100))
+        # self.domain_classifier.add_module('d_fc1', nn.Linear(50 * 4 * 4, 100))
+        self.domain_classifier.add_module('d_fc1', nn.Linear(10, 100))
         self.domain_classifier.add_module('d_bn1', nn.BatchNorm1d(100))
         self.domain_classifier.add_module('d_relu1', nn.ReLU(True))
         self.domain_classifier.add_module('d_fc2', nn.Linear(100, 2))
         self.domain_classifier.add_module('d_softmax', nn.LogSoftmax(dim=1)) # 2 类 log-prob
 
-    def forward(self, input_data, alpha):
+        self.manifold = ManifoldLayer_BatchLevel(
+                                        options={
+                                            'intraK': 10,
+                                            'interK': 20,
+                                            'Regu': 1,
+                                            'ReguAlpha': 0.5,
+                                            'ReguBeta': 0.5,
+                                            'ReducedDim': 10,
+                                            'KernelType': 'Gaussian',
+                                            't': 5,
+                                            'Kernel': 1
+                                        }
+                                    )
+
+
+    def forward(self, input_data, labels, alpha):
         B = input_data.size(0)
         # input_data: 假设原始是 1×28×28，但网络第一层需要 3 通道
         input_data = input_data.expand(B, 3, 28, 28)
@@ -62,12 +82,20 @@ class CNNModel(nn.Module):
         feature = self.feature(input_data)
         # 拉平成 800 维向量
         feature = feature.view(-1, 50 * 4 * 4)
-
+        
+        #TODO:用流形学习降维
+        # ---------- Manifold projection (non-differentiable) ----------
+        manifold_feature = self.manifold(feature, labels)
+        manifold_feature = manifold_feature.float()
+        
+        # ---------- DANN ----------
         # 梯度反转层：正向传播不变，反向传播时梯度 * -alpha
-        reverse_feature = ReverseLayerF.apply(feature, alpha)
+        # reverse_feature = ReverseLayerF.apply(feature, alpha)
+        reverse_feature = ReverseLayerF.apply(manifold_feature, alpha)
 
         # 数字分类结果
-        class_output = self.class_classifier(feature)
+        # class_output = self.class_classifier(feature)
+        class_output = self.class_classifier(manifold_feature)
         # 域分类结果
         domain_output = self.domain_classifier(reverse_feature)
 

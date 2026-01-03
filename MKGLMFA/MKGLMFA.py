@@ -1,0 +1,417 @@
+
+import numpy as np
+import scipy.sparse as sp
+import scipy.linalg as la
+import time
+import torch
+
+from .distance_calculate import eu_dist2
+from .distance_calculate import eu_dist2_torch
+from .kernel import construct_kernel
+from .kernel import construct_kernel_torch
+
+def MKGLMFA_torch(gnd, data, Ln, L, options=None, device=None):
+    """
+    PyTorch version of MKGLMFA.m
+
+    Returns:
+        eigvector : torch.Tensor (n x d)
+        eigvalue  : torch.Tensor (d,)
+        elapse    : dict
+    """
+    if options is None:
+        options = {}
+
+    # ---------- tensorize ----------
+    if not torch.is_tensor(data):
+        data = torch.tensor(data, dtype=torch.float64)
+    data = data.double()
+
+    if device is not None:
+        data = data.to(device)
+        L = L.to(device)
+        Ln = Ln.to(device)
+
+    # ---------- labels (ALWAYS CPU) ----------
+    if torch.is_tensor(gnd):
+        gnd = gnd.detach().cpu().numpy()
+    else:
+        gnd = np.asarray(gnd)
+
+    gnd = np.asarray(gnd)
+    nSmp = data.shape[0]
+    labels = np.unique(gnd)
+
+    # ---------- Kernel ----------
+    K, timeK = construct_kernel_torch(data, None, options, device=device)
+
+    # ---------- Parameters ----------
+    intraK = options.get('intraK', 5)
+    interK = options.get('interK', 20)
+
+    # ---------- Distance ----------
+    D = eu_dist2_torch(K, sqrt=False)
+    beta = torch.mean(torch.sum(D, dim=1)).item()
+
+    # ---------- Intra-class graph Sc ----------
+    Sc = sp.lil_matrix((nSmp, nSmp))
+    nIntraPair = 0
+
+    for lab in labels:
+        idx = np.where(gnd == lab)[0]
+        D_class = D[idx][:, idx]
+        order = np.argsort(D_class, axis=1)
+
+        nClass = len(idx)
+        nIntraPair += nClass ** 2
+
+        if intraK < nClass:
+            order = order[:, :intraK + 1]
+        else:
+            last = order[:, -1][:, None]
+            order = np.hstack([order, np.repeat(last, intraK + 1 - nClass, axis=1)])
+
+        for i, row in enumerate(idx):
+            for j in order[i]:
+                Sc[row, idx[j]] = 1
+
+    I, J = Sc.nonzero()
+    DD = eu_dist2_torch(K[I], K[J], sqrt=False)[:, 0]
+    rho = torch.exp(-DD / beta)
+    Sc[I, J] = rho * np.exp(rho + 1)
+    Sc = Sc.maximum(Sc.T)
+
+    # ---------- Inter-class graph Sp ----------
+    if interK > 0 and interK < (nSmp ** 2 - nIntraPair):
+        D_tmp = D.cpu().numpy().copy()
+        maxD = D_tmp.max() + 100
+
+        for lab in labels:
+            idx = np.where(gnd == lab)[0]
+            D_tmp[np.ix_(idx, idx)] = maxD
+
+        flat_idx = np.argsort(D_tmp.ravel())[:interK]
+        I, J = np.unravel_index(flat_idx, (nSmp, nSmp))
+
+        DD = eu_dist2_torch(K[I], K[J], sqrt=False)[:, 0]
+        rho = torch.exp(-DD / beta).cpu().numpy()
+
+        Sp = sp.coo_matrix(
+            (rho * np.exp(rho - 1), (I, J)), shape=(nSmp, nSmp)
+        ).tocsr()
+        Sp = Sp.maximum(Sp.T)
+
+    else:
+        Sp = np.ones((nSmp, nSmp))
+        for lab in labels:
+            idx = np.where(gnd == lab)[0]
+            Sp[np.ix_(idx, idx)] = 0
+        Sp = sp.csr_matrix(Sp)
+
+    # ---------- Laplacians ----------
+    Dp = np.array(Sp.sum(axis=1)).flatten()
+    Sp = -Sp
+    Sp.setdiag(Sp.diagonal() + Dp)
+
+    Dc = np.array(Sc.sum(axis=1)).flatten()
+    Sc = -Sc
+    Sc.setdiag(Sc.diagonal() + Dc)
+
+    # ---------- Kernel centering ----------
+    if not options.get('keepMean', False):
+        K = K - K.mean(dim=0, keepdim=True)
+
+    # ---------- RRKGE ----------
+    eigvector, eigvalue, elapse = RRKGE_torch(
+        Sp, Sc, options, K, Ln, L, device=device
+    )
+
+    mask = eigvalue >= 1e-10
+    eigvalue = eigvalue[mask]
+    eigvector = eigvector[:, mask]
+
+    return eigvector, eigvalue, elapse
+
+
+def RRKGE_torch(W, D, options, data, Ln, L, device=None):
+    if options is None:
+        options = {}
+
+    Dim = options.get('ReducedDim', 30)
+    Regu = options.get('Regu', 0)
+    ReguAlpha = options.get('ReguAlpha', 0.01)
+
+    # ---------- Kernel ----------
+    if options.get('Kernel', 0):
+        K = data.clone()
+        K = torch.maximum(K, K.t())
+        timeK = 0
+    else:
+        K, timeK = construct_kernel_torch(data, None, options, device=device)
+
+    nSmp = K.shape[0]
+
+    # ---------- Centering ----------
+    t0 = time.process_time()
+
+    sumK = torch.sum(K, dim=1, keepdim=True)
+    Kc = K - sumK / nSmp - sumK.t() / nSmp + torch.sum(sumK) / (nSmp ** 2)
+    Kc = torch.maximum(Kc, Kc.t())
+
+    timePCA = time.process_time() - t0
+
+    # ---------- Convert sparse to tensor ----------
+    W = torch.tensor(W.toarray(), dtype=torch.float64, device=device)
+    D = torch.tensor(D.toarray(), dtype=torch.float64, device=device)
+
+    # ---------- PCA / Regularized ----------
+    t0 = time.process_time()
+
+    if not Regu:
+        eigval_pca, eigvec_pca = torch.linalg.eigh(Kc)
+        idx = eigval_pca / torch.max(torch.abs(eigval_pca)) > 1e-6
+        eigval_pca = eigval_pca[idx]
+        eigvec_pca = eigvec_pca[:, idx]
+
+        Kp = eigvec_pca
+
+        Dp = Kp.T @ D @ Kp
+        Wp = Kp.T @ W @ Kp
+        Wp = Wp + options.get('ReguBeta', 0) * (Kp.T @ Ln @ Kp)
+        Dp = Dp + ReguAlpha * (Kp.T @ L @ Kp)
+
+    else:
+        Wp = Kc.T @ W @ Kc
+        Wp = Wp + options.get('ReguBeta', 0) * (Kc.T @ Ln @ Kc)
+        Dp = Kc.T @ D @ Kc + ReguAlpha * (Kc.T @ L @ Kc)
+
+    Wp = torch.maximum(Wp, Wp.t())
+    Dp = torch.maximum(Dp, Dp.t())
+
+    # ---------- Generalized eigen ----------
+    Dim = min(Dim, Wp.shape[0])
+    # eigval, eigvec = torch.linalg.eigh(Wp, Dp)  # 改成Cholesky 白化
+    
+    # -------- Generalized eigen: Wp v = λ Dp v --------
+    # 数值稳定：对角正则
+    eps = 1e-6
+    Dp = Dp + eps * torch.eye(Dp.shape[0], device=Dp.device)
+
+    # Cholesky decomposition: Dp = L L^T
+    L = torch.linalg.cholesky(Dp)
+
+    # Solve L^{-1} Wp L^{-T}
+    L_inv = torch.linalg.inv(L)
+    A = L_inv @ Wp @ L_inv.T
+
+    # Standard eigen problem
+    eigval, eigvec_y = torch.linalg.eigh(A)
+
+    # Back transform
+    eigvec = L_inv.T @ eigvec_y
+
+    # -------- 排序 + 截断 --------
+    idx = torch.argsort(eigval, descending=True)
+    eigval = eigval[idx][:Dim]
+    eigvec = eigvec[:, idx][:, :Dim]
+
+    if not Regu:
+        eigvec = Kp @ (eigvec / eigval_pca[:, None])
+
+    # ---------- Normalize ----------
+    norm = torch.sqrt(torch.sum((eigvec.T @ K) * eigvec.T, dim=1))
+    eigvec = eigvec / norm
+
+    timeMethod = time.process_time() - t0
+
+    elapse = {
+        'timeK': timeK,
+        'timePCA': timePCA,
+        'timeMethod': timeMethod,
+        'timeAll': timeK + timePCA + timeMethod
+    }
+
+    return eigvec, eigval, elapse
+
+
+
+def MKGLMFA(gnd, data, Ln, L, options=None):
+    """
+    Python version of MKGLMFA.m
+    """
+    if options is None:
+        options = {}
+
+    nSmp = data.shape[0]
+    labels = np.unique(gnd)
+    nLabel = len(labels)
+
+    # ---------- Kernel ----------
+    K, timeK = construct_kernel(data, None, options)
+
+    # ---------- Parameters ----------
+    intraK = options.get('intraK', 5)
+    interK = options.get('interK', 20)
+
+    # ---------- Distance ----------
+    D = eu_dist2(K, sqrt=False)
+    beta = np.mean(np.sum(D, axis=1))
+
+    # ---------- Intra-class graph Sc ----------
+    Sc = sp.lil_matrix((nSmp, nSmp))
+    nIntraPair = 0
+
+    for lab in labels:
+        idx = np.where(gnd == lab)[0]
+        D_class = D[np.ix_(idx, idx)]
+        order = np.argsort(D_class, axis=1)
+
+        nClass = len(idx)
+        nIntraPair += nClass ** 2
+
+        if intraK < nClass:
+            order = order[:, :intraK + 1]
+        else:
+            last = order[:, -1][:, None]
+            order = np.hstack([order, np.repeat(last, intraK + 1 - nClass, axis=1)])
+
+        for i, row in enumerate(idx):
+            for j in order[i]:
+                col = idx[j]
+                Sc[row, col] = 1
+
+    I, J = Sc.nonzero()
+    DD = eu_dist2(K[I], K[J], sqrt=False)
+    rho = np.exp(-DD[:, 0] / beta)
+    Sc[I, J] = rho * np.exp(rho + 1)
+    Sc = Sc.maximum(Sc.T)
+
+    # ---------- Inter-class graph Sp ----------
+    if interK > 0 and interK < (nSmp ** 2 - nIntraPair):
+        D_tmp = D.copy()
+        maxD = D.max() + 100
+
+        for lab in labels:
+            idx = np.where(gnd == lab)[0]
+            D_tmp[np.ix_(idx, idx)] = maxD
+
+        flat_idx = np.argsort(D_tmp.ravel())[:interK]
+        I, J = np.unravel_index(flat_idx, (nSmp, nSmp))
+
+        DD = eu_dist2(K[I], K[J], sqrt=False)
+        rho = np.exp(-DD[:, 0] / beta)
+
+        Sp = sp.coo_matrix(
+            (rho * np.exp(rho - 1), (I, J)), shape=(nSmp, nSmp)
+        ).tocsr()
+        Sp = Sp.maximum(Sp.T)
+
+    else:
+        Sp = np.ones((nSmp, nSmp))
+        for lab in labels:
+            idx = np.where(gnd == lab)[0]
+            Sp[np.ix_(idx, idx)] = 0
+        Sp = sp.csr_matrix(Sp)
+
+    # ---------- Laplacians ----------
+    Dp = np.array(Sp.sum(axis=1)).flatten()
+    Sp = -Sp
+    Sp.setdiag(Sp.diagonal() + Dp)
+
+    Dc = np.array(Sc.sum(axis=1)).flatten()
+    Sc = -Sc
+    Sc.setdiag(Sc.diagonal() + Dc)
+
+    # ---------- Kernel centering ----------
+    if not options.get('keepMean', False):
+        K = K - K.mean(axis=0, keepdims=True)
+
+    # ---------- RRKGE ----------
+    eigvector, eigvalue, elapse = RRKGE(Sp, Sc, options, K, Ln, L)
+
+    # ---------- Clean small eigenvalues ----------
+    mask = eigvalue >= 1e-10
+    eigvalue = eigvalue[mask]
+    eigvector = eigvector[:, mask]
+
+    return eigvector, eigvalue, elapse
+
+
+def RRKGE(W, D, options, data, Ln, L):
+    if options is None:
+        options = {}
+
+    Dim = options.get('ReducedDim', 30)
+    Regu = options.get('Regu', 0)
+    ReguAlpha = options.get('ReguAlpha', 0.01)
+
+    # Kernel matrix
+    if options.get('Kernel', 0):
+        K = data.copy()
+        K = np.maximum(K, K.T)
+        timeK = 0
+    else:
+        K, timeK = construct_kernel(data, None, options)
+
+    nSmp = K.shape[0]
+
+    # -------- Centering kernel --------
+    t0 = time.process_time()
+
+    sumK = np.sum(K, axis=1, keepdims=True)
+    Kc = K - sumK / nSmp - sumK.T / nSmp + np.sum(sumK) / (nSmp ** 2)
+    Kc = np.maximum(Kc, Kc.T)
+
+    timePCA = time.process_time() - t0
+
+    # -------- PCA or Regularized form --------
+    t0 = time.process_time()
+
+    if not Regu:
+        eigval_pca, eigvec_pca = la.eigh(Kc)
+        idx = eigval_pca / np.max(np.abs(eigval_pca)) > 1e-6
+        eigval_pca = eigval_pca[idx]
+        eigvec_pca = eigvec_pca[:, idx]
+
+        Kp = eigvec_pca
+
+        Dp = Kp.T @ D @ Kp if D is not None else None
+
+        Wp = Kp.T @ W @ Kp
+        Wp = Wp + options.get('ReguBeta', 0) * (Kp.T @ Ln @ Kp)
+        Dp = Dp + ReguAlpha * (Kp.T @ L @ Kp)
+
+    else:
+        Wp = Kc.T @ W @ Kc
+        Wp = Wp + options.get('ReguBeta', 0) * (Kc.T @ Ln @ Kc)
+        Dp = Kc.T @ D @ Kc + ReguAlpha * (Kc.T @ L @ Kc)
+
+    Wp = np.maximum(Wp, Wp.T)
+    Dp = np.maximum(Dp, Dp.T)
+
+    # -------- Generalized eigen --------
+    dimMatrix = Wp.shape[0]
+    Dim = min(Dim, dimMatrix)
+
+    eigval, eigvec = la.eigh(Wp, Dp)
+    idx = np.argsort(-eigval)
+    eigval = eigval[idx][:Dim]
+    eigvec = eigvec[:, idx][:, :Dim]
+
+    if not Regu:
+        eigvec = Kp @ (eigvec / eigval_pca[:, None])
+
+    # -------- Normalize --------
+    norm = np.sqrt(np.sum((eigvec.T @ K) * eigvec.T, axis=1))
+    eigvec = eigvec / norm
+
+    timeMethod = time.process_time() - t0
+
+    elapse = {
+        'timeK': timeK,
+        'timePCA': timePCA,
+        'timeMethod': timeMethod,
+        'timeAll': timeK + timePCA + timeMethod
+    }
+
+    return eigvec, eigval, elapse

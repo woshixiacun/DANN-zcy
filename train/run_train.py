@@ -10,9 +10,13 @@ import torch.optim as optim
 import torch.utils.data
 from torchvision import datasets, transforms
 from dataset.data_loader import GetLoader
+
 from models.model import CNNModel
+from models.functions import manifold_reg_loss
+
 import numpy as np
 from train.test import test
+
 
 
 def train() -> None:
@@ -34,7 +38,7 @@ def train() -> None:
 
     # 超参：学习率、批大小、输入尺寸、训练轮数
     lr = 1e-3
-    batch_size = 512
+    batch_size = 128
     image_size = 28
     n_epoch = 100
 
@@ -73,7 +77,7 @@ def train() -> None:
         dataset=ds_source, 
         batch_size=batch_size, 
         shuffle=True, 
-        num_workers=8 # 源域加载器，8 进程并行读图
+        num_workers=0 # 源域加载器，8 进程并行读图
     )
 
     # --------------------目标域--------------------
@@ -91,7 +95,7 @@ def train() -> None:
         dataset=ds_target, 
         batch_size=batch_size, 
         shuffle=True, 
-        num_workers=8
+        num_workers=0
     )
 
     # ===================实例化CNN模型、优化器===================
@@ -160,17 +164,17 @@ def train() -> None:
             input_img.copy_(s_img.repeat(1, 3, 1, 1))
             cls_label.copy_(s_label)
             
-            # **输入模型
-            out_cls, out_dom, out_feature = net(input_img, alpha=alpha)
+            # **输入模型 #加入labels算流形学习的graph
+            out_cls, out_dom, out_feature = net(input_img, cls_label, alpha=alpha)
             # TODO：让net返回feature extracter的最后一层特征
             # 利用特征算流形
             # 增加一个流形 loss_manifold
+            # L, Ln = m_locaglob(out_feature, TYPE='nn', PARAM=5)
+
             
             # 网络返回：分类 logits，域判别 logits
             err_s_cls = loss_cls(out_cls, cls_label)
             err_s_dom = loss_dom(out_dom, domain_label)
-
-
 
             # ---- target ----
             # 目标域前向 + 误差【目标域不训练故障分类器，只要域判别输出】
@@ -191,12 +195,20 @@ def train() -> None:
 
             input_img.copy_(t_img)
 
-            _, out_dom = net(input_img, alpha=alpha)
+            _, out_dom, _ = net(input_img, domain_label, alpha=alpha)
+            
             err_t_dom = loss_dom(out_dom, domain_label)
 
             # 总体误差
             loss = err_s_cls + err_s_dom + err_t_dom
             # 三股误差一起反向，Adam 更新特征提取器、分类器、域判别器全部参数
+            lambda_man = 0.5
+            loss2 = (
+                        err_s_cls + err_s_dom + err_t_dom
+                        + lambda_man * manifold_reg_loss(out_feature, L_batch)
+                    )
+
+
             loss.backward()
             opt.step()
 

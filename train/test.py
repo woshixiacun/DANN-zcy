@@ -73,7 +73,7 @@ def test(dataset_name: str, epoch: int) -> None:
             # MNIST 扩到 3 通道
             img = img.repeat(1, 3, 1, 1) if img.size(1) == 1 else img
 
-            out, _ = net(img, alpha=alpha)
+            out, _ ,_ = net(img, label ,alpha=alpha)
             pred = out.argmax(dim=1)
             n_correct += pred.eq(label).sum().item()
             n_total += label.size(0)
