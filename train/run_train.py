@@ -182,7 +182,7 @@ def train() -> None:
             
             # -------- Manifold regularization Source--------
             # TODO 2：让net返回feature extracter的最后一层特征, 利用特征算流形, 增加一个流形 loss_manifold。
-            loss_s_mani = mkglmfa_rkhs_loss(feature, cls_label, manifold_options)
+            loss_s_mani = mkglmfa_rkhs_loss(feature, cls_label, alpha_local=0.5, beta_global=0.5, options=manifold_options)
 
             # 网络返回：分类 logits，域判别 logits
             err_s_cls = loss_cls(out_cls, cls_label)
@@ -210,25 +210,27 @@ def train() -> None:
             _, out_dom, feature = net(input_img, domain_label, alpha=alpha)
             # -------- Manifold regularization target--------
             # TODO 2
-            loss_t_mani = mkglmfa_rkhs_loss(feature, manifold_options)
+            loss_t_mani = mkglmfa_rkhs_loss(feature, alpha_local=0.5, beta_global=0.5, options=manifold_options)
             # loss_t_mani = 0   
             
             err_t_dom = loss_dom(out_dom, domain_label)
 
-            # 总体误差
+            # 原来的误差
             # loss = err_s_cls + err_s_dom + err_t_dom
             # # # 三股误差一起反向，Adam 更新特征提取器、分类器、域判别器全部参数
             # # loss.backward()
 
+            lambda_s_cls = 0.9
+            lambda_s_dom = 0.6
+            lambda_t_dom = 0.6
             lambda_s_mani = 0.5
             lambda_t_mani = 0.5
 
             loss = (
-                        err_s_cls + err_s_dom + err_t_dom
-                        # + lambda_s_mani * loss_s_mani + lambda_t_mani * loss_t_mani
+                    lambda_s_cls * err_s_cls + lambda_s_dom * err_s_dom   +  lambda_t_dom * err_t_dom
+                                            +  lambda_s_mani * loss_s_mani + lambda_t_mani * loss_t_mani
                     )
             loss.backward()
-
             opt.step()
 
             print(

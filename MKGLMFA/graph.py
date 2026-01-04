@@ -93,21 +93,21 @@ def m_locaglob(DATA, TYPE='nn', PARAM=6):
     print('\nLaplacian Eigenmaps Embedding.')
 
     # adjacency (sparse)
-    A = adjacency(DATA, TYPE, PARAM)
+    A = adjacency(DATA, TYPE, PARAM) # 300*300
     W = A.copy().tolil()
 
     # find non-zero entries  #所有相连的点
-    A_i, A_j = A.nonzero()
+    A_i, A_j = A.nonzero()   # (2854,)   #取所有相连的点对 (i,j)
 
     # beta 全局尺度，控制高斯核的带宽
     D_full = eu_dist2(DATA, sqrt=False)
-    beta = np.mean(np.sum(D_full, axis=1))
+    beta = np.mean(np.sum(D_full, axis=1)) # Step 1：按行求和; Step 2：求均值
 
     # -------- Local weight matrix W --------
     for i, j in zip(A_i, A_j):
         DD = eu_dist2(
-                        DATA[i:i+1], 
-                        DATA[j:j+1],   #i和j之间的欧式距离
+                        DATA[i:i+1], #DATA中第i行
+                        DATA[j:j+1],   #DATA中第j行，i和j之间的欧式距离
                         sqrt=False)[0, 0]  
         
         rho = np.exp(-DD / beta) #权重公式
@@ -117,11 +117,11 @@ def m_locaglob(DATA, TYPE='nn', PARAM=6):
 
     # -------- Global weight matrix Wn --------
     # start with full matrix
-    rho_global = rho * np.exp(rho + 1)
+    rho_global = rho * np.exp(rho + 1)  #rho 用的是：for 循环最后一次的 rho .global 权重与任意样本对 (i,j) 无关,只是一个常数
     Wn = rho_global * np.ones((n, n))
 
     for i, j in zip(A_i, A_j):
-        Wn[i, j] = 0
+        Wn[i, j] = 0  # 如果是邻接，赋值0 ？？
 
     # -------- Local Laplacian --------
     D = np.array(W.sum(axis=1)).flatten()
