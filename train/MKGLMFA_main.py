@@ -1,10 +1,15 @@
 
+import sys
+from pathlib import Path
+ROOT = Path(__file__).resolve().parent.parent  # 项目根目录
+sys.path.append(str(ROOT))
+
 import numpy as np
-from MKGLMFA import MKGLMFA
-from graph import m_locaglob
-from kernel import construct_kernel
+from MKGLMFA.MKGLMFA import MKGLMFA
+from MKGLMFA.graph import m_locaglob
+from MKGLMFA.kernel import construct_kernel
 from sklearn.neighbors import KNeighborsClassifier
-from knn_utils import knnclassification
+from MKGLMFA.knn_utils import knnclassification
 
 N = 4000
 
@@ -31,7 +36,7 @@ inner300data = load_data(r'C:\Users\Clavi\Desktop\coding\DANN-zcy\MKGLMFA\MFPTda
 # print(normaldata.shape)
 # print(outer100data)
 
-# training (前60)
+# training (前60)  共300个点
 trfea = np.vstack([
     normaldata[:60],
     outer100data[:60],

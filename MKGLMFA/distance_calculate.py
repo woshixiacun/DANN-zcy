@@ -16,7 +16,7 @@ def eu_dist2_torch(fea_a, fea_b=None, sqrt=True):
             - (n, n) if fea_b is None
             - (n, m) otherwise
     """
-    fea_a = fea_a.double()
+    # fea_a = fea_a.double()
 
     if fea_b is None:
         # aa: (n, 1)
@@ -37,7 +37,7 @@ def eu_dist2_torch(fea_a, fea_b=None, sqrt=True):
         return D.abs()
 
     else:
-        fea_b = fea_b.double()
+        # fea_b = fea_b.double()
 
         aa = torch.sum(fea_a * fea_a, dim=1, keepdim=True)  # (n, 1)
         bb = torch.sum(fea_b * fea_b, dim=1, keepdim=True)  # (m, 1)
@@ -57,9 +57,10 @@ def eu_dist2(fea_a, fea_b=None, sqrt=True):
     Euclidean distance matrix
     MATLAB: EuDist2
     """
-    fea_a = np.asarray(fea_a, dtype=np.float64)
+    fea_a = np.asarray(fea_a, dtype=np.float32)
 
     if fea_b is None:
+        # 计算所有样本间两两欧氏距离
         aa = np.sum(fea_a * fea_a, axis=1, keepdims=True)
         ab = fea_a @ fea_a.T
         D = aa + aa.T - 2 * ab
@@ -73,7 +74,7 @@ def eu_dist2(fea_a, fea_b=None, sqrt=True):
         return np.abs(D)
 
     else:
-        fea_b = np.asarray(fea_b, dtype=np.float64)
+        fea_b = np.asarray(fea_b, dtype=np.float32)
         aa = np.sum(fea_a * fea_a, axis=1, keepdims=True)
         bb = np.sum(fea_b * fea_b, axis=1, keepdims=True)
         ab = fea_a @ fea_b.T

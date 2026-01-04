@@ -2,7 +2,11 @@ from torch.autograd import Function
 import torch
 import torch.nn as nn
 
-from MKGLMFA.manifoldfeature import manifea_troch
+from models.manifoldfeature import manifea_troch
+from MKGLMFA.graph import m_locaglob_torch
+from MKGLMFA.kernel import construct_kernel_torch
+from MKGLMFA.MKGLMFA import MKGLMFA_torch
+
 
 class ReverseLayerF(Function):
     # 这段代码通过继承 torch.autograd.Function 自定义了一个自动求导函数。
@@ -62,10 +66,64 @@ class ManifoldLayer_BatchLevel(nn.Module):
             Z = Z.to(device)
 
         return Z
-    
-def manifold_reg_loss(feature, L):
+  
+def mkglmfa_rkhs_loss(
+    feature,    # [B, D], requires_grad=True
+    labels,
+    # Sc,         # [B, B]
+    # Sp,         # [B, B]
+    # L,          # [B, B]
+    # Ln,         # [B, B]
+    alpha=0.5,
+    beta=0.5,
+    gamma=1.0,
+    options = None
+    ):
     """
-    feature: [B, d], requires_grad=True
-    L: [B, B] Laplacian (no grad)
+    RKHS version of MKGLMFA loss (NO eigendecomposition)
     """
-    return torch.trace(feature.T @ L @ feature)
+    device = feature.device
+
+        # with torch.no_grad():
+    L, Ln = m_locaglob_torch(
+        feature,
+        TYPE='nn',
+        PARAM=5,
+        device=feature.device
+    ) # 8*8  # 8*8
+
+    # Wp_global, Dp_local = MKGLMFA_torch(
+    #                         gnd=labels,
+    #                         data=feature,
+    #                         Ln=Ln,
+    #                         L=L,
+    #                         options=options)
+    loss_local = torch.trace(feature.T @ L @ feature)
+    loss_global = torch.trace(feature.T @ Ln @ feature)
+
+    loss = loss_local/loss_global
+    # # -------- Kernel matrix --------
+    # # ---------- Kernel ----------
+    # if options is None:
+    #     options = {}
+    # if options.get('Kernel', 0):
+    #     K = feature.clone()
+    #     K = torch.maximum(K, K.t())
+    # else:
+    #     K, _ = construct_kernel_torch(feature, None, options, device=device)
+
+
+    # # -------- RKHS embedding --------
+    # # Z = K A, here A is implicitly parameterized by feature
+    # Z = K @ feature          # [B, D]
+
+    # # -------- Intra-class + manifold --------
+    # M = Sc + alpha * L + beta * Ln
+    # loss_intra = torch.trace(Z.T @ M @ Z)
+
+    # # -------- Inter-class (maximize) --------
+    # loss_inter = torch.trace(Z.T @ Sp @ Z)
+
+    # # -------- Final MKGLMFA objective --------
+    # loss = loss_intra - gamma * loss_inter
+    return loss

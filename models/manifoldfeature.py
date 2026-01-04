@@ -1,9 +1,9 @@
 # from .graph import m_locaglob
-from .graph import m_locaglob_torch
+from MKGLMFA.graph import m_locaglob_torch
 # from .MKGLMFA import MKGLMFA
-from .MKGLMFA import MKGLMFA_torch
+from MKGLMFA.MKGLMFA import MKGLMFA_torch
 # from .kernel import construct_kernel
-from .kernel import construct_kernel_torch
+from MKGLMFA.kernel import construct_kernel_torch
 import numpy as np
 import torch
 

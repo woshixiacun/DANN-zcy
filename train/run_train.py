@@ -12,7 +12,7 @@ from torchvision import datasets, transforms
 from dataset.data_loader import GetLoader
 
 from models.model import CNNModel
-from models.functions import manifold_reg_loss
+from models.functions import mkglmfa_rkhs_loss
 
 import numpy as np
 from train.test import test
@@ -43,10 +43,11 @@ def train() -> None:
     n_epoch = 100
 
     # 固定随机种子，保证每次跑实验可复现
-    manual_seed = random.randint(1, 10_000)
+    manual_seed = 0    # random.randint(1, 10_000)
     random.seed(manual_seed)
     torch.manual_seed(manual_seed)
-    
+    torch.cuda.manual_seed_all(manual_seed)
+
     # ===================构造 MNIST与 MNIST-M的DataLoader===================
     # 数据增强
     img_tf_source = transforms.Compose(
@@ -77,7 +78,8 @@ def train() -> None:
         dataset=ds_source, 
         batch_size=batch_size, 
         shuffle=True, 
-        num_workers=0 # 源域加载器，8 进程并行读图
+        num_workers=0
+          # 源域加载器，8 进程并行读图
     )
 
     # --------------------目标域--------------------
@@ -108,6 +110,17 @@ def train() -> None:
     opt = optim.Adam(net.parameters(), lr=lr)
 
     # ===================损失函数:NLLLOSS==================
+    manifold_options = {
+                        'intraK': 10,
+                        'interK': 20,
+                        'Regu': 1,
+                        'ReguAlpha': 0.5,
+                        'ReguBeta': 0.5,
+                        'ReducedDim': 10,
+                        'KernelType': 'Gaussian',
+                        't': 5,
+                        'Kernel': 1
+                    }
     # 故障分类器的损失、域分类器的损失都是负对数似然（网络最后会 log_softmax）
     loss_cls = torch.nn.NLLLoss()
     loss_dom = torch.nn.NLLLoss()
@@ -165,13 +178,12 @@ def train() -> None:
             cls_label.copy_(s_label)
             
             # **输入模型 #加入labels算流形学习的graph
-            out_cls, out_dom, out_feature = net(input_img, cls_label, alpha=alpha)
-            # TODO：让net返回feature extracter的最后一层特征
-            # 利用特征算流形
-            # 增加一个流形 loss_manifold
-            # L, Ln = m_locaglob(out_feature, TYPE='nn', PARAM=5)
-
+            out_cls, out_dom, feature = net(input_img, cls_label, alpha=alpha)
             
+            # -------- Manifold regularization Source--------
+            # TODO 2：让net返回feature extracter的最后一层特征, 利用特征算流形, 增加一个流形 loss_manifold。
+            loss_s_mani = mkglmfa_rkhs_loss(feature, cls_label, manifold_options)
+
             # 网络返回：分类 logits，域判别 logits
             err_s_cls = loss_cls(out_cls, cls_label)
             err_s_dom = loss_dom(out_dom, domain_label)
@@ -195,28 +207,37 @@ def train() -> None:
 
             input_img.copy_(t_img)
 
-            _, out_dom, _ = net(input_img, domain_label, alpha=alpha)
+            _, out_dom, feature = net(input_img, domain_label, alpha=alpha)
+            # -------- Manifold regularization target--------
+            # TODO 2
+            loss_t_mani = mkglmfa_rkhs_loss(feature, manifold_options)
+            # loss_t_mani = 0   
             
             err_t_dom = loss_dom(out_dom, domain_label)
 
             # 总体误差
-            loss = err_s_cls + err_s_dom + err_t_dom
-            # 三股误差一起反向，Adam 更新特征提取器、分类器、域判别器全部参数
-            lambda_man = 0.5
-            loss2 = (
+            # loss = err_s_cls + err_s_dom + err_t_dom
+            # # # 三股误差一起反向，Adam 更新特征提取器、分类器、域判别器全部参数
+            # # loss.backward()
+
+            lambda_s_mani = 0.5
+            lambda_t_mani = 0.5
+
+            loss = (
                         err_s_cls + err_s_dom + err_t_dom
-                        + lambda_man * manifold_reg_loss(out_feature, L_batch)
+                        # + lambda_s_mani * loss_s_mani + lambda_t_mani * loss_t_mani
                     )
-
-
             loss.backward()
+
             opt.step()
 
             print(
                 f"epoch: {epoch}, [iter: {i + 1} / {n_iter}], "
                 f"err_s_label: {err_s_cls.item():.6f}, "
                 f"err_s_domain: {err_s_dom.item():.6f}, "
-                f"err_t_domain: {err_t_dom.item():.6f}"
+                f"err_t_domain: {err_t_dom.item():.6f}, "
+                f"loss_s_mani: {loss_s_mani.item():.6f}, "
+                f"loss_t_mani: {loss_t_mani.item():.6f}"
             )
 
         torch.save(net, model_root / f"mnist_mnistm_model_epoch_{epoch}.pth")
