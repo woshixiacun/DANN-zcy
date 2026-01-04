@@ -14,103 +14,51 @@ def RRKGE_torch(W, D, options, data, Ln, L, device=None):
     if options is None:
         options = {}
 
-    Dim = options.get('ReducedDim', 30)
+    # Dim = options.get('ReducedDim', 30)
     Regu = options.get('Regu', 0)
     ReguAlpha = options.get('ReguAlpha', 0.01)
+    ReguBeta = options.get('ReguBeta', 0)
 
     # ---------- Kernel ----------
     if options.get('Kernel', 0):
-        K = data.clone()   # 如果有kernel传进来的是K
-        K = torch.maximum(K, K.t())
-        timeK = 0
+        K = data.clone()
+        K = torch.maximum(K, K.T)  #？？？？为什么做这一步，还原K，之前做了半中心化
     else:
-        K, timeK = construct_kernel_torch(data, None, options, device=device)
+        K, _ = construct_kernel_torch(data, None, options, device=device)
 
     nSmp = K.shape[0]
 
-    # ---------- Centering ----------
-    t0 = time.process_time()
-
+    # ---------- Full kernel centering ----------  全部去中心化，之前做了半取中心化
     sumK = torch.sum(K, dim=1, keepdim=True)
-    Kc = K - sumK / nSmp - sumK.t() / nSmp + torch.sum(sumK) / (nSmp ** 2)
-    Kc = torch.maximum(Kc, Kc.t())
-
-    timePCA = time.process_time() - t0
-
-    # ---------- Convert sparse to tensor ----------
-    W = torch.tensor(W.toarray(), dtype=torch.float64, device=device)
-    D = torch.tensor(D.toarray(), dtype=torch.float64, device=device)
+    Kc = K - sumK / nSmp - sumK.T / nSmp + torch.sum(sumK) / (nSmp ** 2)
+    Kc = torch.maximum(Kc, Kc.T)
 
     # ---------- PCA / Regularized ----------
-    t0 = time.process_time()
-
     if not Regu:
         eigval_pca, eigvec_pca = torch.linalg.eigh(Kc)
-        idx = eigval_pca / torch.max(torch.abs(eigval_pca)) > 1e-6
-        eigval_pca = eigval_pca[idx]
-        eigvec_pca = eigvec_pca[:, idx]
+        mask = eigval_pca / eigval_pca.abs().max() > 1e-6
+        eigval_pca = eigval_pca[mask]
+        eigvec_pca = eigvec_pca[:, mask]
 
         Kp = eigvec_pca
 
-        Dp = Kp.T @ D @ Kp
         Wp = Kp.T @ W @ Kp
-        Wp = Wp + options.get('ReguBeta', 0) * (Kp.T @ Ln @ Kp)
+        Wp = Wp + ReguBeta * (Kp.T @ Ln @ Kp)
+
+        Dp = Kp.T @ D @ Kp
         Dp = Dp + ReguAlpha * (Kp.T @ L @ Kp)
 
     else:
         Wp = Kc.T @ W @ Kc
-        Wp = Wp + options.get('ReguBeta', 0) * (Kc.T @ Ln @ Kc)
+        Wp = Wp + ReguBeta * (Kc.T @ Ln @ Kc)
         Dp = Kc.T @ D @ Kc + ReguAlpha * (Kc.T @ L @ Kc)
 
-    Wp_global = torch.maximum(Wp, Wp.t())
-    Dp_local = torch.maximum(Dp, Dp.t())
+    # ---------- Symmetrize ----------
+    Wp_global = torch.maximum(Wp, Wp.T)
+    Dp_local = torch.maximum(Dp, Dp.T)
 
     return Wp_global, Dp_local
 
-    # # ---------- Generalized eigen ----------
-    # Dim = min(Dim, Wp.shape[0])
-    # # eigval, eigvec = torch.linalg.eigh(Wp, Dp)  # 改成Cholesky 白化
-    
-    # # -------- Generalized eigen: Wp v = λ Dp v --------
-    # # 数值稳定：对角正则
-    # eps = 1e-6
-    # Dp = Dp + eps * torch.eye(Dp.shape[0], device=Dp.device)
-
-    # # Cholesky decomposition: Dp = L L^T
-    # L = torch.linalg.cholesky(Dp)
-
-    # # Solve L^{-1} Wp L^{-T}
-    # L_inv = torch.linalg.inv(L)
-    # A = L_inv @ Wp @ L_inv.T
-
-    # # Standard eigen problem
-    # eigval, eigvec_y = torch.linalg.eigh(A)
-
-    # # Back transform
-    # eigvec = L_inv.T @ eigvec_y
-
-    # # -------- 排序 + 截断 --------
-    # idx = torch.argsort(eigval, descending=True)
-    # eigval = eigval[idx][:Dim]
-    # eigvec = eigvec[:, idx][:, :Dim]
-
-    # if not Regu:
-    #     eigvec = Kp @ (eigvec / eigval_pca[:, None])
-
-    # # ---------- Normalize ----------
-    # norm = torch.sqrt(torch.sum((eigvec.T @ K) * eigvec.T, dim=1))
-    # eigvec = eigvec / norm
-
-    # timeMethod = time.process_time() - t0
-
-    # elapse = {
-    #     'timeK': timeK,
-    #     'timePCA': timePCA,
-    #     'timeMethod': timeMethod,
-    #     'timeAll': timeK + timePCA + timeMethod
-    # }
-
-    # return eigvec, eigval, elapse
     
 
 def MKGLMFA_torch(gnd, data, Ln, L, options=None, device=None):
@@ -125,125 +73,100 @@ def MKGLMFA_torch(gnd, data, Ln, L, options=None, device=None):
     if options is None:
         options = {}
 
-    # ---------- tensorize ----------
     if not torch.is_tensor(data):
-        data = torch.tensor(data, dtype=torch.float64)
-    # data = data.double()
+        data = torch.tensor(data, dtype=torch.float32)
+
+    if not torch.is_tensor(gnd):
+        gnd = torch.tensor(gnd, dtype=torch.long)
 
     if device is not None:
         data = data.to(device)
-        L = L.to(device)
+        gnd = gnd.to(device)
         Ln = Ln.to(device)
+        L = L.to(device)
 
     # # ---------- labels (ALWAYS CPU) ----------
     # if torch.is_tensor(gnd):
     #     gnd = gnd.detach().cpu().numpy()
     # else:
     #     gnd = np.asarray(gnd)
-        
-    # ---------- labels (gpu) ----------
-    if torch.is_tensor(gnd):
-        gnd = gnd.to(device).long()
-    else:
-        gnd = torch.tensor(gnd, dtype=torch.long,device=device)
 
     nSmp = data.shape[0]
     labels = torch.unique(gnd)
 
     # ---------- Kernel ----------
-    K, timeK = construct_kernel_torch(data, None, options, device=device)
+    K, _ = construct_kernel_torch(data, None, options, device=device)
 
     # ---------- Parameters ----------
     intraK = options.get('intraK', 5)
     interK = options.get('interK', 20)
 
-    # ---------- Distance ----------
+    # ---------- Distance in RKHS ----------
     D = eu_dist2_torch(K, sqrt=False)
-    beta = torch.mean(torch.sum(D, dim=1)).item()
+    beta = torch.mean(torch.sum(D, dim=1))
 
     # ---------- Intra-class graph Sc ----------
-    Sc = torch.zeros((nSmp, nSmp), dtype=torch.float64, device=device)
+    Sc = torch.zeros((nSmp, nSmp), device=device)
     nIntraPair = 0
 
     for lab in labels:
         idx = torch.where(gnd == lab)[0]
-        D_class = D[idx][:, idx]
-        order = torch.argsort(D_class, axis=1)
-
-        nClass = idx.shape[0]
+        nClass = idx.numel()
         nIntraPair += nClass ** 2
 
-        if intraK < nClass:
-            order = order[:, :intraK + 1]
-        else:
-            last = order[:, -1].unsqueeze(1)
-            repeat_times = intraK + 1 - nClass
-            last_repeated = last.repeat(1,repeat_times,1).squeeze(1)
-            order = torch.hstack([order, last_repeated])
+        D_class = D[idx][:, idx]
+        order = torch.argsort(D_class, dim=1)
 
-        # for i, row in enumerate(idx):
-        #     for j in order[i]:
-        #         Sc[row, idx[j]] = 1
-        ## 向量赋值，替换双层for循环
-        row_idx = idx.unsqueeze(1).repeat(1, order.shape[1])
-        col_idx = idx [order]
-        Sc[row_idx, col_idx] = 1.0
+        k = min(intraK + 1, nClass)
+        order = order[:, :k]
+
+        for i in range(nClass):
+            row = idx[i]
+            cols = idx[order[i]]
+            Sc[row, cols] = 1.0
 
     I, J = torch.nonzero(Sc, as_tuple=True)
-    DD = eu_dist2_torch(K[I], K[J], sqrt=False)[:, 0]
+    DD = eu_dist2_torch(K[I], K[J], sqrt=False).squeeze()
     rho = torch.exp(-DD / beta)
-    Sc[I, J] = rho * np.exp(rho + 1)
+    Sc[I, J] = rho * torch.exp(rho + 1)
     Sc = torch.maximum(Sc, Sc.T)
 
     # ---------- Inter-class graph Sp ----------
     if interK > 0 and interK < (nSmp ** 2 - nIntraPair):
         D_tmp = D.clone()
-        maxD = torch.max(D_tmp) + 100
+        maxD = D.max() + 100
 
         for lab in labels:
             idx = torch.where(gnd == lab)[0]
-            # D_tmp[np.ix_(idx, idx)] = maxD
-            D_tmp[idx.unsqueeze(1),idx] = maxD
+            D_tmp[idx[:, None], idx[None, :]] = maxD
 
-        #扁平化排序，索引还原
-        flat_D = D_tmp.flatten()
-        flat_idx = torch.argsort(flat_D)[:interK]
-        I, J = torch.div(flat_idx, nSmp, rounding_mode= 'floor'), flat_idx % nSmp
+        flat_idx = torch.argsort(D_tmp.flatten())[:interK]
+        I = flat_idx // nSmp
+        J = flat_idx % nSmp
 
-        DD = eu_dist2_torch(K[I], K[J], sqrt=False)[:, 0]
+        DD = eu_dist2_torch(K[I], K[J], sqrt=False).squeeze()
         rho = torch.exp(-DD / beta)
 
-        # 构建稀疏矩阵
-        # Sp = sp.coo_matrix(
-        #     (rho * np.exp(rho - 1), (I, J)), shape=(nSmp, nSmp)
-        # ).tocsr()
-        # Sp = Sp.maximum(Sp.T)
-        Sp = torch.zeros((nSmp,nSmp),dtype= torch.float64,device= device)
-        Sp[I,J] = rho * (rho - 1)
+        Sp = torch.zeros((nSmp, nSmp), device=device)
+        Sp[I, J] = rho * torch.exp(rho - 1)
         Sp = torch.maximum(Sp, Sp.T)
 
     else:
-        Sp = torch.ones((nSmp, nSmp),dtype= torch.float64,device= device)
+        Sp = torch.ones((nSmp, nSmp), device=device)
         for lab in labels:
             idx = torch.where(gnd == lab)[0]
-            # Sp[np.ix_(idx, idx)] = 0
-            Sp [idx.unsqueeze(1),idx] = 0.0
-        # Sp = sp.csr_matrix(Sp)
+            Sp[idx[:, None], idx[None, :]] = 0.0
 
     # ---------- Laplacians ----------
     #计算Sc的拉普拉斯矩阵  类内
-    # Dc = np.array(Sc.sum(axis=1)).flatten()
-    Dc = torch.sum(Sc,dim=1).flatten()
+    Dc = torch.sum(Sc, dim=1)
     Sc = -Sc
-    # Sc.setdiag(Sc.diagonal() + Dc)
-    Sc.fill_diagonal_(Sc.diagonal()+Dc)
+    Sc.diagonal().add_(Dc)
     
     #计算Sp的拉普拉斯矩阵  类间
-    # Dp = np.array(Sp.sum(axis=1)).flatten()
-    Dp = torch.sum(Sp,dim=1).flatten()
+    Dp = torch.sum(Sp, dim=1)
     Sp = -Sp
-    # Sp.setdiag(Sp.diagonal() + Dp)
-    Sp.fill_diagonal_(Sp.diagonal()+Dp)
+    Sp.diagonal().add_(Dp)
     
     Sc_local = Sc
     Sp_global = Sp
@@ -255,18 +178,6 @@ def MKGLMFA_torch(gnd, data, Ln, L, options=None, device=None):
     Wp_global, Dp_local = RRKGE_torch(Sp, Sc, options, K, Ln, L, device=device)
 
     return Sc_local,Sp_global, Wp_global, Dp_local
-    # # ---------- RRKGE ----------
-    # eigvector, eigvalue, elapse = RRKGE_torch(
-    #     Sp, Sc, options, K, Ln, L, device=device
-    # )
-
-    # mask = eigvalue >= 1e-10
-    # eigvalue = eigvalue[mask]
-    # eigvector = eigvector[:, mask]
-
-    # return eigvector, eigvalue, elapse
-
-
 
 
 # ------------------------no torch version--------------------------------

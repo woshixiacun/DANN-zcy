@@ -93,10 +93,10 @@ def mkglmfa_rkhs_loss(
 
     loss_local = torch.trace(feature.T @ L @ feature)
     loss_global = torch.trace(feature.T @ Ln @ feature)
-    loss_manifold1 = loss_local/loss_global
+    # loss_manifold1 = loss_local/loss_global
 
     loss_manifold2 = torch.trace(feature.T @ (Sc_local + alpha_local*L) @ feature) / torch.trace(feature.T @ (Sp_global + beta_global*Ln) @ feature)
     
-    loss_manifold23 = torch.trace(feature.T @ Dp_local @ feature) / torch.trace(feature.T @ Wp_global @ feature)
+    # loss_manifold23 = torch.trace(feature.T @ Dp_local @ feature) / torch.trace(feature.T @ Wp_global @ feature)
     
-    return 
+    return loss_manifold2
