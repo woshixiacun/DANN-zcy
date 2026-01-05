@@ -13,7 +13,10 @@ data/
 # dataset/
 dataset/MNIST/
 dataset/mnist_m/
+MKGLMFA/MFPTdata
 .vscode/
+dataset/1Ddata
+dataset/1Ddata_convet_zcy
 
 # Distribution / packaging
 .Python
