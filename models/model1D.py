@@ -40,7 +40,7 @@ class CNNModel_1D(nn.Module):
             self.featureure_dim = feature.view(1, -1).size(1)
 
 
-        # ===== 标签分类器（数字 0-9） =====
+        # ===== 标签分类器 =====
         self.class_classifier = nn.Sequential(
             nn.Linear(self.featureure_dim, 256),
             nn.BatchNorm1d(256),
@@ -63,13 +63,17 @@ class CNNModel_1D(nn.Module):
     def forward(self, input_data, alpha=1.0):
         # x: [B, 1024]
         x = input_data.unsqueeze(1)   # [B, 1, 1024]
-
+        # 提取公共特征
         feature = self.featureure(x)
+        # 拉平
         feature = feature.view(feature.size(0), -1)
 
+        # ---------- DANN ----------
+        # 数字分类结果
         class_out = self.class_classifier(feature)
-
+        # 梯度反转层：正向传播不变，反向传播时梯度 * -alpha
         reverse_feature = ReverseLayerF.apply(feature, alpha)
+        # 域分类结果
         domain_out = self.domain_classifier(reverse_feature)
 
         return class_out, domain_out, feature
